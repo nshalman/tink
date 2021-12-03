@@ -39,6 +39,7 @@ type DaemonConfig struct {
 	HTTPAuthority         string
 	HTTPBasicAuthUsername string
 	HTTPBasicAuthPassword string
+	Insecure              bool
 }
 
 func (c *DaemonConfig) AddFlags(fs *pflag.FlagSet) {
@@ -52,6 +53,7 @@ func (c *DaemonConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&c.TLSCert, "tls-cert", "", "")
 	fs.StringVar(&c.CertDir, "cert-dir", "", "")
 	fs.StringVar(&c.HTTPAuthority, "http-authority", ":42114", "The address used to expose the HTTP server")
+	fs.BoolVar(&c.Insecure, "insecure", false, "Run in insecure mode (without TLS)")
 }
 
 func (c *DaemonConfig) PopulateFromLegacyEnvVar() {
@@ -92,6 +94,11 @@ func (c *DaemonConfig) PopulateFromLegacyEnvVar() {
 	}
 	if basicAuthPass := os.Getenv("TINK_AUTH_PASSWORD"); basicAuthPass != "" {
 		c.HTTPBasicAuthPassword = basicAuthPass
+	}
+	if insecure, isSet := os.LookupEnv("INSECURE"); isSet {
+		if b, err := strconv.ParseBool(insecure); err != nil {
+			c.Insecure = b
+		}
 	}
 }
 
@@ -180,22 +187,30 @@ func NewRootCommand(config *DaemonConfig, logger log.Logger) *cobra.Command {
 				logger.Info("Your database schema is not up to date. Please apply migrations running tink-server with env var ONLY_MIGRATION set.")
 			}
 
-			cert, modT := rpcServer.SetupGRPC(ctx, logger, &rpcServer.ConfigGRPCServer{
-				Facility:      config.Facility,
-				TLSCert:       config.TLSCert,
-				GRPCAuthority: config.GRPCAuthority,
-				DB:            tinkDB,
-			}, errCh)
+			if config.Insecure {
+				rpcServer.SetupGRPC(ctx, logger, &rpcServer.ConfigGRPCServer{
+					Facility:      config.Facility,
+					TLSCert:       "insecure",
+					GRPCAuthority: config.GRPCAuthority,
+					DB:            tinkDB,
+				}, errCh)
+			} else {
+				cert, modT := rpcServer.SetupGRPC(ctx, logger, &rpcServer.ConfigGRPCServer{
+					Facility:      config.Facility,
+					TLSCert:       config.TLSCert,
+					GRPCAuthority: config.GRPCAuthority,
+					DB:            tinkDB,
+				}, errCh)
 
-			httpServer.SetupHTTP(ctx, logger, &httpServer.Config{
-				CertPEM:               cert,
-				ModTime:               modT,
-				GRPCAuthority:         config.GRPCAuthority,
-				HTTPAuthority:         config.HTTPAuthority,
-				HTTPBasicAuthUsername: config.HTTPBasicAuthUsername,
-				HTTPBasicAuthPassword: config.HTTPBasicAuthPassword,
-			}, errCh)
-
+				httpServer.SetupHTTP(ctx, logger, &httpServer.Config{
+					CertPEM:               cert,
+					ModTime:               modT,
+					GRPCAuthority:         config.GRPCAuthority,
+					HTTPAuthority:         config.HTTPAuthority,
+					HTTPBasicAuthUsername: config.HTTPBasicAuthUsername,
+					HTTPBasicAuthPassword: config.HTTPBasicAuthPassword,
+				}, errCh)
+			}
 			select {
 			case err = <-errCh:
 				logger.Error(err)

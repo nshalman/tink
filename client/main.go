@@ -54,11 +54,8 @@ func (o *ConnOptions) SetFlags(flagSet *pflag.FlagSet) {
 }
 
 func NewClientConn(opt *ConnOptions) (*grpc.ClientConn, error) {
-	var err error
-	var conn *grpc.ClientConn
-	if opt.Insecure {
-		conn, err = grpc.Dial(opt.GRPCAuthority, grpc.WithInsecure())
-	} else {
+	method := grpc.WithInsecure()
+	if !opt.Insecure {
 		resp, err := http.Get(opt.CertURL)
 		if err != nil {
 			return nil, errors.Wrap(err, "fetch cert")
@@ -77,8 +74,13 @@ func NewClientConn(opt *ConnOptions) (*grpc.ClientConn, error) {
 		}
 
 		creds := credentials.NewClientTLSFromCert(cp, "")
-		conn, err = grpc.Dial(opt.GRPCAuthority, grpc.WithTransportCredentials(creds))
+		method = grpc.WithTransportCredentials(creds)
 	}
+	conn, err := grpc.Dial(opt.GRPCAuthority,
+		method,
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to tinkerbell server")
 	}
@@ -92,43 +94,36 @@ func GetConnection() (*grpc.ClientConn, error) {
 		return nil, errors.New("undefined TINKERBELL_GRPC_AUTHORITY")
 	}
 
+	method := grpc.WithInsecure()
 	insecure := os.Getenv("TINKERBELL_INSECURE")
-	if insecure != "" {
-		conn, err := grpc.Dial(grpcAuthority,
-			grpc.WithInsecure(),
-			grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
-			grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
-		)
-		if err != nil {
-			return nil, errors.Wrap(err, "connect to tinkerbell server")
+
+	if insecure == "" {
+		certURL := os.Getenv("TINKERBELL_CERT_URL")
+		if certURL == "" {
+			return nil, errors.New("undefined TINKERBELL_CERT_URL")
 		}
-		return conn, nil
-	}
+		resp, err := http.Get(certURL)
+		if err != nil {
+			return nil, errors.Wrap(err, "fetch cert")
+		}
+		defer resp.Body.Close()
 
-	certURL := os.Getenv("TINKERBELL_CERT_URL")
-	if certURL == "" {
-		return nil, errors.New("undefined TINKERBELL_CERT_URL")
-	}
-	resp, err := http.Get(certURL)
-	if err != nil {
-		return nil, errors.Wrap(err, "fetch cert")
-	}
-	defer resp.Body.Close()
+		certs, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "read cert")
+		}
 
-	certs, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.Wrap(err, "read cert")
-	}
+		cp := x509.NewCertPool()
+		ok := cp.AppendCertsFromPEM(certs)
+		if !ok {
+			return nil, errors.Wrap(err, "parse cert")
+		}
 
-	cp := x509.NewCertPool()
-	ok := cp.AppendCertsFromPEM(certs)
-	if !ok {
-		return nil, errors.Wrap(err, "parse cert")
+		creds := credentials.NewClientTLSFromCert(cp, "")
+		method = grpc.WithTransportCredentials(creds)
 	}
-
-	creds := credentials.NewClientTLSFromCert(cp, "")
 	conn, err := grpc.Dial(grpcAuthority,
-		grpc.WithTransportCredentials(creds),
+		method,
 		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	)

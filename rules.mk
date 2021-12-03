@@ -45,9 +45,11 @@ tink-server-image: cmd/tink-server/tink-server-linux-amd64
 tink-worker-image: cmd/tink-worker/tink-worker-linux-amd64
 	docker build -t tink-worker cmd/tink-worker/
 
-.PHONY: run-stack
+.PHONY: run-stack run-stack-insecure
 run-stack:
 	docker-compose up --build
+run-stack-insecure:
+	docker-compose -f docker-compose-insecure.yaml up --build
 
 ifeq ($(origin GOBIN), undefined)
 GOBIN := ${PWD}/bin
