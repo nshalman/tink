@@ -31,7 +31,6 @@ type FullClient struct {
 	HardwareClient hardware.HardwareServiceClient
 }
 
-
 // NewFullClient returns a FullClient. A structure that contains all the
 // clients made available from tink-server.
 func NewFullClient(conn grpc.ClientConnInterface) *FullClient {
@@ -45,33 +44,41 @@ func NewFullClient(conn grpc.ClientConnInterface) *FullClient {
 type ConnOptions struct {
 	CertURL       string
 	GRPCAuthority string
+	Insecure      bool
 }
 
 func (o *ConnOptions) SetFlags(flagSet *pflag.FlagSet) {
 	flagSet.StringVar(&o.CertURL, "tinkerbell-cert-url", "http://127.0.0.1:42114/cert", "The URL where the certificate is located")
 	flagSet.StringVar(&o.GRPCAuthority, "tinkerbell-grpc-authority", "127.0.0.1:42113", "Link to tink-server grcp api")
+	flagSet.BoolVar(&o.Insecure, "insecure", false, "Run in insecure mode (no TLS)")
 }
 
 func NewClientConn(opt *ConnOptions) (*grpc.ClientConn, error) {
-	resp, err := http.Get(opt.CertURL)
-	if err != nil {
-		return nil, errors.Wrap(err, "fetch cert")
-	}
-	defer resp.Body.Close()
+	var err error
+	var conn *grpc.ClientConn
+	if opt.Insecure {
+		conn, err = grpc.Dial(opt.GRPCAuthority, grpc.WithInsecure())
+	} else {
+		resp, err := http.Get(opt.CertURL)
+		if err != nil {
+			return nil, errors.Wrap(err, "fetch cert")
+		}
+		defer resp.Body.Close()
 
-	certs, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.Wrap(err, "read cert")
-	}
+		certs, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "read cert")
+		}
 
-	cp := x509.NewCertPool()
-	ok := cp.AppendCertsFromPEM(certs)
-	if !ok {
-		return nil, errors.Wrap(err, "parse cert")
-	}
+		cp := x509.NewCertPool()
+		ok := cp.AppendCertsFromPEM(certs)
+		if !ok {
+			return nil, errors.Wrap(err, "parse cert")
+		}
 
-	creds := credentials.NewClientTLSFromCert(cp, "")
-	conn, err := grpc.Dial(opt.GRPCAuthority, grpc.WithTransportCredentials(creds))
+		creds := credentials.NewClientTLSFromCert(cp, "")
+		conn, err = grpc.Dial(opt.GRPCAuthority, grpc.WithTransportCredentials(creds))
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to tinkerbell server")
 	}
