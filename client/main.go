@@ -53,27 +53,34 @@ func (o *ConnOptions) SetFlags(flagSet *pflag.FlagSet) {
 	flagSet.BoolVar(&o.Insecure, "insecure", false, "Run in insecure mode (no TLS)")
 }
 
+func fetchCert(url string) (credentials.TransportCredentials, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, errors.Wrap(err, "fetch cert")
+	}
+	defer resp.Body.Close()
+
+	certs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.Wrap(err, "read cert")
+	}
+
+	cp := x509.NewCertPool()
+	ok := cp.AppendCertsFromPEM(certs)
+	if !ok {
+		return nil, errors.Wrap(err, "parse cert")
+	}
+
+	return credentials.NewClientTLSFromCert(cp, ""), nil
+}
+
 func NewClientConn(opt *ConnOptions) (*grpc.ClientConn, error) {
 	method := grpc.WithInsecure()
 	if !opt.Insecure {
-		resp, err := http.Get(opt.CertURL)
+		creds, err := fetchCert(opt.CertURL)
 		if err != nil {
-			return nil, errors.Wrap(err, "fetch cert")
+			return nil, err
 		}
-		defer resp.Body.Close()
-
-		certs, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return nil, errors.Wrap(err, "read cert")
-		}
-
-		cp := x509.NewCertPool()
-		ok := cp.AppendCertsFromPEM(certs)
-		if !ok {
-			return nil, errors.Wrap(err, "parse cert")
-		}
-
-		creds := credentials.NewClientTLSFromCert(cp, "")
 		method = grpc.WithTransportCredentials(creds)
 	}
 	conn, err := grpc.Dial(opt.GRPCAuthority,
@@ -102,24 +109,10 @@ func GetConnection() (*grpc.ClientConn, error) {
 		if certURL == "" {
 			return nil, errors.New("undefined TINKERBELL_CERT_URL")
 		}
-		resp, err := http.Get(certURL)
+		creds, err := fetchCert(certURL)
 		if err != nil {
-			return nil, errors.Wrap(err, "fetch cert")
+			return nil, err
 		}
-		defer resp.Body.Close()
-
-		certs, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return nil, errors.Wrap(err, "read cert")
-		}
-
-		cp := x509.NewCertPool()
-		ok := cp.AppendCertsFromPEM(certs)
-		if !ok {
-			return nil, errors.Wrap(err, "parse cert")
-		}
-
-		creds := credentials.NewClientTLSFromCert(cp, "")
 		method = grpc.WithTransportCredentials(creds)
 	}
 	conn, err := grpc.Dial(grpcAuthority,
